@@ -1,0 +1,89 @@
+---
+title: "Exercise Quality Prediction Model"
+author: "Mitchell deJong"
+date: "06/01/2021"
+output: html_document
+---
+
+## Executive Summary / Overview
+To estimate the quality of movement during barbell exercises in the Human Activity Recognition dataset I have trained a predictive model using random forest methodology. Due to the low quality of the data a total of 105 columns had to be dropped, but the remainder were enough to create a random forest model with 99% accuracy. 
+
+## Preparing the data
+Before building the model I needed to tidy the dataset and evaluate what sort of model would work best for this particular challenge.
+```{r R_setup, warning=FALSE, results='hide', message=FALSE}
+#rm(list = ls())
+setwd('C:/Users/MdeJong/Documents/R/Practical Machine Learning/PredictionAssignment')
+library(caret); library(tidyverse); library(skimr)
+set.seed(34078)
+```
+
+```{r data_preparation}
+# load data and split into training and testing sets
+exerData <- read.csv('pml-training.csv')
+inTrain <- createDataPartition(exerData$classe, p = 0.75, list = FALSE)
+training <- exerData[inTrain,]
+testing <- exerData[-inTrain,]
+```
+
+### Data Exploration
+As the classe column is our variable of interest it is worthwhile to visualize the distribution with a bar graph.
+```{r class_graph}
+ggplot(data = training, aes(x = classe)) +
+  geom_bar(fill = "Dark Blue")
+```  
+
+For a more in depth dive into the data the skimr package is simple to use while offering more information than the str() function, even if it offers more information than is likely necessary in this instance.
+
+```{r data_exploration}
+skim(training)
+```  
+
+We can see that many of the numeric columns were missing 14,407 observations, and so had a completion rate of only 2.11 percent. If the data coverage was less egregiously bad I would simply impute new values using K nearest neighbors to plug the holes, but as it is I simply chose to drop the offending columns. Notice that while the character type columns do not have any missing values, most have 14,407 instances of empty strings instead of real data. Just like with the numeric columns, these faulty character-type columns will be dropped. While removing these mostly empty columns I will also remove columns relating to user name or time, as I do not want any spurious correlations affecting my model.
+
+```{r column_removal}
+# replace empty strings with NA
+training[training == ""] <- NA
+
+#list of columns and how many missing values they have
+scarceColumns <- lapply(training, function (x) sum(is.na(x)))
+scarceColumns <- scarceColumns[scarceColumns > 0]
+#training <- select(training, !names(thing3))
+badColLength <- length(names(scarceColumns))
+# Get the names of the 100 columns with missing values
+badcol <- names(scarceColumns)
+
+# Add columns based on subject name and timing to the list of what we don't want
+badcol <- append(badcol, c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp"))
+
+# take only the columns without NAs or empty strings.
+col_train <- select(training, !all_of(badcol))
+```
+There were `r badColLength` columns (out of the initial 160) with missing values. After removing the five additional columns there are now only 55 variables in the dataset.
+
+## Random Forest Model
+
+### Building the model
+I chose to use a random forest model due to their resistance to overfitting and ease of use. I considered creating a composite model using random forest, regularized regression, boosting, and GLMs; but the solo random forest model performed well enough to make the other models unnecessary.
+
+```{r random_forest, cache=TRUE}
+modFit <- train(classe ~ ., data = col_train, method = 'rf', prox=1, na.action = na.pass)
+modFit
+```
+
+```{r save_model, include=FALSE}
+#saveRDS(modFit, 'RandomForestModel.rds')
+# for loading later
+#modFit <- readRDS('RandomForestModel.rds')
+```
+
+## Cross Validation
+This would normally be where I test out my new model on the testing set put aside when the data were loaded. The random forest method includes "out of bag" performance testing automatically as the model is built, which is very similar to standard cross validation. I will use cross validation here not because it is necessary but instead to show that it matches what the model itself reports.
+```{r cross_validation}
+# the test set must be prepped the same was the training set was, by dropping the same columns.
+col_test <- select(testing, !all_of(badcol))
+# We use our model to make predictions about the testing data, then compare to the actual outcome values.
+predicted <- predict(modFit, col_test)
+conMat <- confusionMatrix(reference = as.factor(col_test$classe), data = predicted, mode = 'everything')
+conMat
+```
+Cross validation suggests our out of sample error is `r round(conMat$overall[1], 3)`, which is a very close match to what the model reported about itself above (`r round(modFit$results[2,2], 3)`). This model will be sufficient for prediction purposes.
